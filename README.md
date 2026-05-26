@@ -1,4 +1,4 @@
-# DMS/Tally Comparator (Privacy-first)
+# DMS/Tally Comparator (Privacy-first) [Link]([https://www.example.com](https://dms-tally-comparison-automation-too.vercel.app/)
 
 Compare two Excel exports—**DMS** and **Tally**—and generate reports that highlight **matched**, **unmatched**, and **mismatched** values.
 
