@@ -164,6 +164,66 @@ function computeNonEmptyColumns(rows: Row[], allCols: string[], preservedCols: S
   return { keep, removed }
 }
 
+function findExcelHeaderRow(rows: Array<Array<any>>): { header: string[] | null; dataStartIndex: number } {
+  const knownHeaders = new Set(
+    DEFAULT_MAPPING_PAIRS.flatMap((pair) => [pair.dms, pair.tally]).map((value) => normalizeCell(value).toLowerCase())
+  )
+
+  let bestCandidate: { index: number; score: number; nonEmptyCount: number; headerRow: string[] } | null = null
+  const maxScanRows = Math.min(rows.length, 50)
+
+  for (let i = 0; i < maxScanRows; i++) {
+    const row = rows[i]
+    if (!row || row.length === 0) continue
+
+    const normalizedRow = row.map((cell) => normalizeCell(cell))
+    const nonEmptyValues = normalizedRow.filter((value) => value !== '')
+    if (nonEmptyValues.length < 2) continue
+
+    const headerMatches = nonEmptyValues.filter((value) => knownHeaders.has(value.toLowerCase())).length
+    const stringLikeCount = nonEmptyValues.filter((value) => isNaN(Number(value.replace(/,/g, '')))).length
+    const score = headerMatches * 20 + stringLikeCount
+
+    if (!bestCandidate || score > bestCandidate.score) {
+      bestCandidate = {
+        index: i,
+        score,
+        nonEmptyCount: nonEmptyValues.length,
+        headerRow: normalizedRow
+      }
+    }
+  }
+
+  if (bestCandidate) {
+    const { score, nonEmptyCount, index, headerRow } = bestCandidate
+    if (score >= 20 || (nonEmptyCount >= 5 && score > 0)) {
+      return { header: headerRow, dataStartIndex: index + 1 }
+    }
+  }
+
+  return { header: null, dataStartIndex: 0 }
+}
+
+function parseSheetWithHeaderRow(rows: Array<Array<any>>): { rows: Row[]; cols: string[] } {
+  const { header, dataStartIndex } = findExcelHeaderRow(rows)
+  const headerRow = header ?? rows[0]?.map((value) => normalizeCell(value)) ?? []
+  const cols = headerRow.map((value, idx) => {
+    const normalized = normalizeCell(value)
+    return normalized !== '' ? normalized : `__EMPTY_${idx}`
+  })
+
+  const json: Row[] = []
+  for (const row of rows.slice(dataStartIndex)) {
+    const rowObject: Row = {}
+    for (let colIndex = 0; colIndex < cols.length; colIndex++) {
+      rowObject[cols[colIndex]] = row[colIndex] ?? ''
+    }
+    json.push(rowObject)
+  }
+
+  return { rows: json, cols }
+}
+
 function createComparisonTitleRow(dmsColumns: string[], tallyColumns: string[]): string[] {
   return [
     'DMS',
@@ -382,14 +442,9 @@ function loadExcel(file: File, sheetIndex = 0): Promise<{ rows: Row[]; cols: str
         const wb = XLSX.read(data, { type: 'array' })
         const sheetName = wb.SheetNames[sheetIndex]
         const ws = wb.Sheets[sheetName]
-        // defval ensures empty cells appear as ''
-        const json = XLSX.utils.sheet_to_json(ws, { defval: '' }) as Row[]
-        const allCols = Array.from(
-          new Set(
-            json.flatMap((r) => Object.keys(r))
-          )
-        )
-        resolve({ rows: json, cols: allCols })
+        const rawRows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' }) as Array<Array<any>>
+        const parsed = parseSheetWithHeaderRow(rawRows)
+        resolve(parsed)
       } catch (e) {
         reject(e)
       }
